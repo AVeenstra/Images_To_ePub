@@ -1,3 +1,19 @@
+''' Convert a folder with images to an ePub file. Great for comics and manga!
+    Copyright (C) 2014  Antoine Veenstra
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU Affero General Public License as published
+    by the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU Affero General Public License for more details.
+
+    You should have received a copy of the GNU Affero General Public License
+    along with this program.  If not, see [http://www.gnu.org/licenses/]
+'''
 import os
 from optparse import OptionParser
 from _ePubMaker import EPubMaker, CmdProgress
@@ -43,6 +59,5 @@ if __name__ == '__main__':
 				creator.run()
 		else:
 			import _Gui
-			_Gui.start_Gui(dir="C:\\Users\\Antoine\\Downloads\\[complete]\\Manga\\Vagabond [v1-27]\\Vagabond v01",save_file="C:\\Users\\Antoine\\Desktop\\Vagabond v01.epub",str_name="Vagabond v01")
-			# _Gui.start_Gui(dir=options.dir,save_file=options.file,str_name=options.name)
+			_Gui.start_Gui(dir=options.dir,save_file=options.file,str_name=options.name)
 			

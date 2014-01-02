@@ -1,4 +1,20 @@
 # coding=utf-8
+''' Convert a folder with images to an ePub file. Great for comics and manga!
+    Copyright (C) 2014  Antoine Veenstra
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU Affero General Public License as published
+    by the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU Affero General Public License for more details.
+
+    You should have received a copy of the GNU Affero General Public License
+    along with this program.  If not, see [http://www.gnu.org/licenses/]
+'''
 import tempfile, threading, traceback, zipfile, datetime, struct, imghdr, math, os
 
 media_types = {'.png':'image/png','.jpg':'image/jpeg','.gif':'image/gif'}
