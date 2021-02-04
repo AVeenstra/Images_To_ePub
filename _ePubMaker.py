@@ -19,6 +19,7 @@ import datetime
 import imghdr
 import math
 import os
+import re
 import struct
 import tempfile
 import threading
@@ -26,6 +27,13 @@ import traceback
 import zipfile
 
 media_types = {'.png': 'image/png', '.jpg': 'image/jpeg', '.gif': 'image/gif'}
+
+
+def natural_keys(text):
+    """
+    http://nedbatchelder.com/blog/200712/human_sorting.html
+    """
+    return [(int(c) if c.isdigit() else c) for c in re.split(r'(\d+)', text)]
 
 
 class EPubMaker(threading.Thread):
@@ -122,8 +130,9 @@ class EPubMaker(threading.Thread):
         root, dirs, files = walker.send(None)
         walker.close()
 
-        dirs = sorted(dirs)
-        files = self.get_images(sorted(files), root)
+        dirs.sort(key=natural_keys)
+        files.sort(key=natural_keys)
+        files = self.get_images(files, root)
 
         if self.progress:
             self.progress['maximum'] = len(dirs) + 2
@@ -140,7 +149,7 @@ class EPubMaker(threading.Thread):
             for sub in walker:
                 if self.stopped():
                     return
-                sub_files.extend(self.get_images(sorted(sub[2]), sub[0]))
+                sub_files.extend(self.get_images(sorted(sub[2], key=natural_keys), sub[0]))
             walker.close()
             chapter = open(os.path.join(self.tdir, 'chapter%s.xhtml' % counter), 'w')
             chapter.write('''<?xml version='1.0' encoding='utf-8'?>
@@ -223,7 +232,7 @@ class EPubMaker(threading.Thread):
         for sub in walker:
             if self.stopped():
                 return
-            for x in self.get_images(sorted(sub[2])):
+            for x in self.get_images(sorted(sub[2], key=natural_keys)):
                 if 'cover' in x.lower():
                     filename = 'cover' + x[x.rfind('.'):]
                     self.zip.write(os.path.join(sub[0], x), os.path.join('OEBPS', 'images', filename))
