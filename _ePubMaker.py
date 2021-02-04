@@ -91,8 +91,8 @@ class EPubMaker(threading.Thread):
                 self.search_cover()
                 self.make_tree()
                 self.close_content_toc()
-            self.zip.write(os.path.join(self.tdir, 'content.opf'), 'OEBPS\\content.opf')
-            self.zip.write(os.path.join(self.tdir, 'toc.ncx'), 'OEBPS\\toc.ncx')
+            self.zip.write(os.path.join(self.tdir, 'content.opf'), os.path.join('OEBPS', 'content.opf'))
+            self.zip.write(os.path.join(self.tdir, 'toc.ncx'), os.path.join('OEBPS', 'toc.ncx'))
 
         if self.progress:
             self.progress['value'] = self.progress['maximum']
@@ -101,7 +101,7 @@ class EPubMaker(threading.Thread):
         self.zip.writestr('mimetype', 'application/epub+zip')
 
     def make_meta(self):
-        self.zip.writestr('META-INF\\container.xml', '''<?xml version='1.0' encoding='utf-8'?>
+        self.zip.writestr(os.path.join('META-INF', 'container.xml'), '''<?xml version='1.0' encoding='utf-8'?>
 <container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0">
   <rootfiles>
     <rootfile media-type="application/oebps-package+xml" full-path="OEBPS/content.opf"/>
@@ -109,7 +109,7 @@ class EPubMaker(threading.Thread):
 </container>''')
 
     def make_css(self):
-        self.zip.writestr('OEBPS\\stylesheet.css', '''body
+        self.zip.writestr(os.path.join('OEBPS', 'stylesheet.css'), '''body
 {
     margin:0pt;
     padding:0pt;
@@ -164,7 +164,8 @@ class EPubMaker(threading.Thread):
 </html>
 ''')
             chapter.close()
-            self.zip.write(os.path.join(self.tdir, 'chapter%s.xhtml' % counter), 'OEBPS\\chapter%s.xhtml' % counter)
+            self.zip.write(os.path.join(self.tdir, 'chapter%s.xhtml' % counter),
+                           os.path.join('OEBPS', 'chapter%s.xhtml' % counter))
             self.content.write('''
         <item id="chapter%(counter)s" href="chapter%(counter)s.xhtml" media-type="application/xhtml+xml"/>''' % {
                 'counter': counter})
@@ -204,7 +205,8 @@ class EPubMaker(threading.Thread):
 </html>
 ''')
             chapter.close()
-            self.zip.write(os.path.join(self.tdir, 'leftover.xhtml'), 'OEBPS\\chapter%s.xhtml' % counter)
+            self.zip.write(os.path.join(self.tdir, 'leftover.xhtml'),
+                           os.path.join('OEBPS', 'chapter%s.xhtml' % counter))
             self.content.write('''
             <item id="leftover" href="leftover.xhtml" media-type="application/xhtml+xml"/>''')
             self.ncx.append('\n\t\t<itemref idref="leftover" />')
@@ -224,9 +226,9 @@ class EPubMaker(threading.Thread):
             for x in self.get_images(sorted(sub[2])):
                 if 'cover' in x.lower():
                     filename = 'cover' + x[x.rfind('.'):]
-                    self.zip.write(os.path.join(sub[0], x), 'OEBPS\\images\\' + filename)
+                    self.zip.write(os.path.join(sub[0], x), os.path.join('OEBPS', 'images', filename))
                     width, height = self.get_image_size(os.path.join(sub[0], x))
-                    self.zip.writestr('OEBPS\\cover.xhtml', '''<?xml version='1.0' encoding='utf-8'?>
+                    self.zip.writestr(os.path.join('OEBPS', 'cover.xhtml'), '''<?xml version='1.0' encoding='utf-8'?>
 <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
     <head>
         <meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
@@ -272,7 +274,7 @@ class EPubMaker(threading.Thread):
             if file_type:
                 if root:
                     file_name = str(self.picture_at) + extension
-                    self.zip.write(os.path.join(root, x), 'OEBPS\\images\\' + file_name)
+                    self.zip.write(os.path.join(root, x), os.path.join('OEBPS', 'images', file_name))
                     self.content.write('\n\t\t<item id="image%(id)s" href="images/%(name)s" media-type="%(type)s"/>'
                                        % {'id': self.picture_at, 'name': file_name, 'type': file_type})
                     width, height = self.get_image_size(os.path.join(root, x))
