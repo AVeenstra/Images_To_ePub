@@ -1,6 +1,6 @@
 # coding=utf-8
 """ Convert a folder with images to an ePub file. Great for comics and manga!
-    Copyright (C) 2014  Antoine Veenstra
+    Copyright (C) 2021  Antoine Veenstra
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Affero General Public License as published
@@ -15,18 +15,23 @@
     You should have received a copy of the GNU Affero General Public License
     along with this program.  If not, see [http://www.gnu.org/licenses/]
 """
-import datetime
-import imghdr
 import math
 import os
 import re
-import struct
-import tempfile
+import sys
 import threading
 import traceback
-import zipfile
+import uuid
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Optional, List
+from zipfile import ZipFile, ZIP_STORED, ZIP_DEFLATED
 
-media_types = {'.png': 'image/png', '.jpg': 'image/jpeg', '.gif': 'image/gif'}
+import PIL.Image
+from jinja2 import Environment, FileSystemLoader, StrictUndefined
+
+MEDIA_TYPES = {'.png': 'image/png', '.jpg': 'image/jpeg', '.gif': 'image/gif'}
+TEMPLATE_DIR = Path(__file__).parent.joinpath("templates")
 
 
 def natural_keys(text):
@@ -36,353 +41,205 @@ def natural_keys(text):
     return [(int(c) if c.isdigit() else c) for c in re.split(r'(\d+)', text)]
 
 
+def filter_images(files):
+    files.sort(key=natural_keys)
+    for x in files:
+        _, extension = os.path.splitext(x)
+        file_type = MEDIA_TYPES.get(extension)
+        if file_type:
+            yield x, file_type, extension
+
+
+class Chapter:
+    def __init__(self, dir_path, title, start: str = None):
+        self.dir_path = dir_path
+        self.title = title
+        self.children: List[Chapter] = []
+        self._start = start
+
+    @property
+    def start(self) -> Optional[str]:
+        if self._start:
+            return self._start
+        if self.children:
+            return self.children[0].start
+
+    @start.setter
+    def start(self, value):
+        self._start = value
+
+    @property
+    def depth(self) -> int:
+        if self.children:
+            return 1 + max(child.depth for child in self.children)
+        return 1
+
+
 class EPubMaker(threading.Thread):
-    def __init__(self, master, input_dir, file, name, progress=None):
+    def __init__(self, master, input_dir, file, name, wrap_pages, grayscale, max_width, max_height, progress=None):
         threading.Thread.__init__(self)
         self.master = master
+        self.progress = None
         if self.master:
-            self.progress = master.progress
+            self.progress = master
         elif progress:
             self.progress = progress
-        else:
-            self.progress = None
         self.dir = input_dir
         self.file = file
         self.name = name
         self.picture_at = 1
-        self.stop_event = threading.Event()
+        self.stop_event = False
 
-        self.zip = None
-        self.tdir = None
-        self.content = None
-        self.toc = None
-        self.ncx = None
+        self.template_env = Environment(loader=FileSystemLoader(TEMPLATE_DIR), undefined=StrictUndefined)
+
+        self.zip: Optional[ZipFile] = None
+        self.cover = None
+        self.chapter_tree: Optional[Chapter] = None
+        self.images = []
+        self.uuid = 'urn:uuid:' + str(uuid.uuid1())
+        self.grayscale = grayscale
+        self.max_width = max_width
+        self.max_height = max_height
+        self.wrap_pages = wrap_pages
 
     def run(self):
         try:
-            if not os.path.isdir(self.dir):
-                raise Exception("The given directory does not exist!")
-            if not self.name:
-                raise Exception("No name given!")
+            assert os.path.isdir(self.dir), "The given directory does not exist!"
+            assert self.name, "No name given!"
+
             self.make_epub()
-            if not self.master:
+
+            if self.master is None:
+                print()
                 print("ePub created")
+            else:
+                self.master.generic_queue.put(lambda: self.master.stop(1))
 
         except Exception as e:
             if not isinstance(e, StopException):
-                if self.master:
-                    print("error", str(e))
-                    self.master.showerror(
+                if self.master is not None:
+                    self.master.generic_queue.put(lambda: self.master.showerror(
                         "Error encountered",
-                        "The following error was thrown:\n{}\nDon't forget to delete the incomplete file!".format(e)
-                    )
+                        "The following error was thrown:\n{}".format(e)
+                    ))
                 else:
-                    print("Error encountered:")
+                    print("Error encountered:", file=sys.stderr)
                     traceback.print_exc()
-                    print("Don't forget to delete the incomplete file! (if it was created)")
-
-        if self.master:
-            self.master.working = False
-            self.master.thread = None
-            self.master.set_state()
+            try:
+                if os.path.isfile(self.file):
+                    os.remove(self.file)
+            except IOError:
+                pass
 
     def make_epub(self):
-        with zipfile.ZipFile(self.file, mode='w') as self.zip, \
-                tempfile.TemporaryDirectory(prefix='ePub_') as self.tdir:
-            with open(os.path.join(self.tdir, 'content.opf'), 'w') as self.content, \
-                    open(os.path.join(self.tdir, 'toc.ncx'), 'w') as self.toc:
-                self.ncx = []
-                self.make_mimetype()
-                self.make_meta()
-                self.make_css()
-                self.open_content_toc()
-                self.search_cover()
-                self.make_tree()
-                self.close_content_toc()
-            self.zip.write(os.path.join(self.tdir, 'content.opf'), os.path.join('OEBPS', 'content.opf'))
-            self.zip.write(os.path.join(self.tdir, 'toc.ncx'), os.path.join('OEBPS', 'toc.ncx'))
+        with ZipFile(self.file, mode='w', compression=ZIP_DEFLATED) as self.zip:
+            self.zip.writestr('mimetype', 'application/epub+zip', compress_type=ZIP_STORED)
+            self.add_file('META-INF', "container.xml")
+            self.add_file('stylesheet.css')
+            self.make_tree()
+            self.assign_image_ids()
+            self.write_images()
+            self.write_template('package.opf')
+            self.write_template('toc.xhtml')
+            self.write_template('toc.ncx')
 
-        if self.progress:
-            self.progress['value'] = self.progress['maximum']
-
-    def make_mimetype(self):
-        self.zip.writestr('mimetype', 'application/epub+zip')
-
-    def make_meta(self):
-        self.zip.writestr(os.path.join('META-INF', 'container.xml'), '''<?xml version='1.0' encoding='utf-8'?>
-<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0">
-  <rootfiles>
-    <rootfile media-type="application/oebps-package+xml" full-path="OEBPS/content.opf"/>
-  </rootfiles>
-</container>''')
-
-    def make_css(self):
-        self.zip.writestr(os.path.join('OEBPS', 'stylesheet.css'), '''body
-{
-    margin:0pt;
-    padding:0pt;
-    text-align:center;
-}
-''')
+    def add_file(self, *path: str):
+        self.zip.write(TEMPLATE_DIR.joinpath(*path), os.path.join(*path))
 
     def make_tree(self):
-        walker = os.walk(self.dir, onerror=self.throw_error)
-        root, dirs, files = walker.send(None)
-        walker.close()
+        root = Path(self.dir)
+        self.chapter_tree = Chapter(root.parent, None)
+        chapter_shortcuts = {root.parent: self.chapter_tree}
 
-        dirs.sort(key=natural_keys)
-        files.sort(key=natural_keys)
-        files = self.get_images(files, root)
+        for dir_path, dir_names, filenames in os.walk(self.dir):
+            dir_names.sort(key=natural_keys)
+            images = self.get_images(filenames, dir_path)
+            dir_path = Path(dir_path)
+            chapter = Chapter(dir_path, dir_path.name, images[0] if images else None)
+            chapter_shortcuts[dir_path.parent].children.append(chapter)
+            chapter_shortcuts[dir_path] = chapter
 
-        if self.progress:
-            self.progress['maximum'] = len(dirs) + 2
-            self.progress['value'] = 0
+        while len(self.chapter_tree.children) == 1:
+            self.chapter_tree = self.chapter_tree.children[0]
 
-        counter = 1
-
-        for sub_dir in dirs:
-            if self.progress:
-                self.progress['value'] = counter
-
-            walker = os.walk(os.path.join(root, sub_dir), onerror=self.throw_error)
-            sub_files = []
-            for sub in walker:
-                if self.stopped():
-                    return
-                sub_files.extend(self.get_images(sorted(sub[2], key=natural_keys), sub[0]))
-            walker.close()
-            chapter = open(os.path.join(self.tdir, 'chapter%s.xhtml' % counter), 'w')
-            chapter.write('''<?xml version='1.0' encoding='utf-8'?>
-<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
-    <head>
-        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
-        <link href="stylesheet.css" rel="stylesheet" type="text/css"/>
-        <title>Chapter %s</title>
-    </head>
-    <body>
-        <div>''' % counter)
-            for image in sub_files:
-                chapter.write('''
-            <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" 
-                 width="100%%" height="100%%" viewBox="0 0 %(width)s %(height)s" preserveAspectRatio="none">
-                <image width="%(width)s" height="%(height)s" xlink:href="images/%(filename)s"/>
-            </svg>''' % image)
-            chapter.write('''
-        </div>
-    </body>
-</html>
-''')
-            chapter.close()
-            self.zip.write(os.path.join(self.tdir, 'chapter%s.xhtml' % counter),
-                           os.path.join('OEBPS', 'chapter%s.xhtml' % counter))
-            self.content.write('''
-        <item id="chapter%(counter)s" href="chapter%(counter)s.xhtml" media-type="application/xhtml+xml"/>''' % {
-                'counter': counter})
-            self.ncx.append('\n\t\t<itemref idref="chapter%s" />' % counter)
-            self.toc.write('''
-    <navPoint id="chapter%(counter)s" playOrder="%(number)s">
-        <navLabel>
-            <text>%(title)s</text>
-        </navLabel>
-        <content src="chapter%(counter)s.xhtml"/>
-    </navPoint>''' % {'counter': counter, 'number': len(self.ncx), 'title': sub_dir})
-            counter += 1
-
-        if self.progress:
-            self.progress['value'] = counter
-
-        if files:
-            chapter = open(os.path.join(self.tdir, 'leftover.xhtml'), 'w')
-            chapter.write('''<?xml version='1.0' encoding='utf-8'?>
-<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
-    <head>
-        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
-        <link href="stylesheet.css" rel="stylesheet" type="text/css"/>
-        <title>Leftovers</title>
-    </head>
-    <body>
-        <div>''')
-            for image in files:
-                chapter.write('''
-            <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" 
-                 width="100%%" height="100%%" viewBox="0 0 %(width)s %(height)s" preserveAspectRatio="none">
-                <image width="%(width)s" height="%(height)s" xlink:href="images/%(filename)s"/>
-            </svg>''' % image)
-            chapter.write('''
-        </div>
-    </body>
-</html>
-''')
-            chapter.close()
-            self.zip.write(os.path.join(self.tdir, 'leftover.xhtml'),
-                           os.path.join('OEBPS', 'chapter%s.xhtml' % counter))
-            self.content.write('''
-            <item id="leftover" href="leftover.xhtml" media-type="application/xhtml+xml"/>''')
-            self.ncx.append('\n\t\t<itemref idref="leftover" />')
-            self.toc.write('''
-    <navPoint id="leftover" playOrder="%s">
-        <navLabel>
-            <text>Leftovers</text>
-        </navLabel>
-        <content src="leftover.xhtml"/>
-    </navPoint>''' % len(self.ncx))
-
-    def search_cover(self):
-        walker = os.walk(self.dir, onerror=self.throw_error)
-        for sub in walker:
-            if self.stopped():
-                return
-            for x in self.get_images(sorted(sub[2], key=natural_keys)):
-                if 'cover' in x.lower():
-                    filename = 'cover' + x[x.rfind('.'):]
-                    self.zip.write(os.path.join(sub[0], x), os.path.join('OEBPS', 'images', filename))
-                    width, height = self.get_image_size(os.path.join(sub[0], x))
-                    self.zip.writestr(os.path.join('OEBPS', 'cover.xhtml'), '''<?xml version='1.0' encoding='utf-8'?>
-<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
-    <head>
-        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
-        <meta name="calibre:cover" content="true"/>
-        <link href="stylesheet.css" rel="stylesheet" type="text/css"/>
-        <title>Cover</title>
-    </head>
-    <body>
-        <div>
-            <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" 
-                 width="100%%" height="100%%" viewBox="0 0 %(width)s %(height)s" preserveAspectRatio="none">
-                <image width="%(width)s" height="%(height)s" xlink:href="images/%(filename)s"/>
-            </svg>
-        </div>
-    </body>
-</html>
-''' % {'width': width, 'height': height, 'filename': filename})
-                    root, extension = os.path.splitext(x)
-                    filetype = media_types.get(extension)
-                    self.content.write('''
-        <item id="%(filename)s" href="images/%(filename)s" media-type="%(type)s"/>
-        <item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/>'''
-                                       % {'filename': filename, 'type': filetype})
-                    self.ncx.append('\n\t\t<itemref idref="cover" />')
-                    self.toc.write('''
-    <navPoint id="cover" playOrder="1">
-        <navLabel>
-            <text>Cover Page</text>
-        </navLabel>
-        <content src="cover.xhtml"/>
-    </navPoint>''')
-                    return True
-        walker.close()
-        return False
-
-    def get_images(self, files, root=None):
+    def get_images(self, files, root):
         result = []
-        for x in files:
-            if self.stopped():
-                return
-            ignore, extension = os.path.splitext(x)
-            file_type = media_types.get(extension)
-            if file_type:
-                if root:
-                    file_name = str(self.picture_at) + extension
-                    self.zip.write(os.path.join(root, x), os.path.join('OEBPS', 'images', file_name))
-                    self.content.write('\n\t\t<item id="image%(id)s" href="images/%(name)s" media-type="%(type)s"/>'
-                                       % {'id': self.picture_at, 'name': file_name, 'type': file_type})
-                    width, height = self.get_image_size(os.path.join(root, x))
-                    result.append({'filename': file_name, 'width': width, 'height': height})
-                    self.picture_at += 1
-                else:
-                    result.append(x)
+        for x, file_type, extension in filter_images(files):
+            data = self.add_image(os.path.join(root, x), file_type, extension)
+            result.append(data)
+            if not self.cover and 'cover' in x.lower():
+                self.cover = data
+                data["is_cover"] = True
         return result
 
-    def open_content_toc(self):
-        uuid = 'bookmadeon' + datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-        self.content.write('''<?xml version="1.0" encoding="UTF-8"?>
-<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookID" version="2.0" >
-    <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
-        <dc:title>%s</dc:title>
-        <dc:language>en-US</dc:language>
-        <dc:rights>Public Domain</dc:rights>
-        <dc:creator opf:role="aut">ePub Creator</dc:creator>
-        <dc:publisher>ePub Creator</dc:publisher>
-        <dc:identifier id="BookID" opf:scheme="UUID">%s</dc:identifier>
-        <meta name="Sigil version" content="0.2.4"/>
-    </metadata>
-    <manifest>
-        <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml" />
-        <item id="style" href="stylesheet.css" media-type="text/css" />''' % (self.name, uuid))
-        self.toc.write('''<?xml version="1.0" encoding="UTF-8"?>
-<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+    def add_image(self, source, file_type, extension):
+        data = {"extension": extension, "type": file_type, "source": source, "is_cover": False}
+        self.images.append(data)
+        return data
 
-<head>
-    <meta name="dtb:uid" content="%s"/>
-    <meta name="dtb:depth" content="1"/>
-    <meta name="dtb:totalPageCount" content="0"/>
-    <meta name="dtb:maxPageNumber" content="0"/>
-</head>
+    def assign_image_ids(self):
+        if not self.cover and self.images:
+            cover = self.images[0]
+            cover["is_cover"] = True
+            self.cover = cover
+        padding_width = len(str(len(self.images)))
+        for count, image in enumerate(self.images):
+            image["id"] = f"image_{count:0{padding_width}}"
+            image["filename"] = image["id"] + image["extension"]
 
-<docTitle>
-    <text>%s</text>
-</docTitle>
+    def write_images(self):
+        if self.progress:
+            self.progress.progress_set_maximum(len(self.images))
+            self.progress.progress_set_value(0)
 
-<navMap>''' % (uuid, self.name))
+        template = self.template_env.get_template("page.xhtml.jinja2")
 
-    def close_content_toc(self):
-        self.content.write('''
-    </manifest>
-    <spine toc="ncx">''')
+        for progress, image in enumerate(self.images):
+            output = os.path.join('images', image["filename"])
+            image_data: PIL.Image.Image = PIL.Image.open(image["source"])
+            image["width"], image["height"] = image_data.size
+            image["type"] = image_data.get_format_mimetype()
+            should_resize = (self.max_width and self.max_width < image["width"]) or (
+                        self.max_height and self.max_height < image["height"])
+            should_grayscale = self.grayscale and image_data.mode != "L"
+            if not should_grayscale and not should_resize:
+                self.zip.write(image["source"], output)
+            else:
+                image_format = image_data.format
+                if should_resize:
+                    width_scale = image["width"] / self.max_width if self.max_width else 1.0
+                    height_scale = image["height"] / self.max_height if self.max_height else 1.0
+                    scale = max(width_scale, height_scale)
+                    image_data = image_data.resize((int(image["width"] / scale), int(image["height"] / scale)))
+                    image["width"], image["height"] = image_data.size
+                if should_grayscale:
+                    image_data = image_data.convert("L")
+                with self.zip.open(output, "w") as image_file:
+                    image_data.save(image_file, format=image_format)
 
-        for line in self.ncx:
-            self.content.write(line)
+            if self.wrap_pages:
+                self.zip.writestr(os.path.join("pages", image["id"] + ".xhtml"), template.render(image))
 
-        self.content.write('''
-    </spine>
-</package>''')
-        self.toc.write('''
-</navMap>
-</ncx>''')
+            if self.progress:
+                self.progress.progress_set_value(progress)
+            self.check_is_stopped()
+        if self.progress:
+            self.progress.progress_set_value(len(self.images))
 
-    def get_image_size(self, fname):
-        '''Determine the image type of fhandle and return its size.
-        from draco'''
-        fhandle = open(fname, 'rb')
-        head = fhandle.read(24)
-        if len(head) != 24:
-            return
-        if imghdr.what(fname) == 'png':
-            check = struct.unpack('>i', head[4:8])[0]
-            if check != 0x0d0a1a0a:
-                return
-            width, height = struct.unpack('>ii', head[16:24])
-        elif imghdr.what(fname) == 'gif':
-            width, height = struct.unpack('<HH', head[6:10])
-        elif imghdr.what(fname) == 'jpeg':
-            try:
-                fhandle.seek(0)  # Read 0xff next
-                size = 2
-                ftype = 0
-                while not 0xc0 <= ftype <= 0xcf:
-                    fhandle.seek(size, 1)
-                    byte = fhandle.read(1)
-                    while ord(byte) == 0xff:
-                        byte = fhandle.read(1)
-                    ftype = ord(byte)
-                    size = struct.unpack('>H', fhandle.read(2))[0] - 2
-                # We are at a SOFn block
-                fhandle.seek(1, 1)  # Skip `precision' byte.
-                height, width = struct.unpack('>HH', fhandle.read(4))
-            except Exception:  # IGNORE:W0703
-                return
-        else:
-            return
-        return width, height
+    def write_template(self, name, *, out=None, data=None):
+        out = out or name
+        data = data or {
+            "name": self.name, "uuid": self.uuid, "cover": self.cover, "chapter_tree": self.chapter_tree,
+            "images": self.images, "wrap_pages": self.wrap_pages,
+        }
+        self.zip.writestr(out, self.template_env.get_template(name + '.jinja2').render(data))
 
     def stop(self):
-        self.stop_event.set()
+        self.stop_event = True
 
-    def stopped(self):
-        return self.stop_event.isSet()
-
-    def throw_error(self, e):
-        raise e
+    def check_is_stopped(self):
+        if self.stop_event:
+            raise StopException()
 
 
 class StopException(Exception):
@@ -392,30 +249,33 @@ class StopException(Exception):
 
 class CmdProgress:
     def __init__(self, nice):
+        self.last_update = datetime.now()
+        self.update_interval = timedelta(seconds=0.25)
+        self.nice = nice
+        self.edges = [" ", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"]
         self.width = 60
         self.maximum = 150
         self.value = 0
-        self.nice = nice
 
-    def __getitem__(self, key):
-        if key == "value":
-            return self.value
-        elif key == "maximum":
-            return self.maximum
+    def progress_set_value(self, value):
+        self.value = value
+        if 0 <= self.value <= self.maximum:
+            if self.maximum == self.value or datetime.now() > self.last_update + self.update_interval:
+                self.last_update = datetime.now()
+                if self.nice:
+                    if self.value < self.maximum:
+                        progress = self.value / self.maximum * self.width * 8.0
+                        done = math.floor(progress / 8)
+                        edge = self.edges[int(progress - done * 8)]
 
-    def __setitem__(self, key, value):
-        if key == "value" and isinstance(value, int) and 0 <= value <= self.maximum:
-            self.value = value
+                        print('\r│' + '█' * done + edge + ' ' * (self.width - done - 1) + '│ ', end="")
+                    else:
+                        print('\r│' + '█' * self.width + '│')
+                else:
+                    print('At {}/{}'.format(self.value, self.maximum))
+
+    def progress_set_maximum(self, value):
+        self.maximum = value
+        if 0 <= value:
             if self.nice:
-                edge = ['', '░', '▒', '▓']
-
-                progress = self.value / self.maximum * self.width * 3.0
-
-                print('┌' + '─' * self.width + '┐')
-                print('│' + '▓' * math.floor(progress / 3) + edge[math.ceil(progress % 3)] +
-                      ' ' * (self.width - math.ceil(progress / 3)) + '│')
-                print('└' + '─' * self.width + '┘')
-            else:
-                print('At {}/{}'.format(self.value, self.maximum))
-        elif key == 'maximum' and isinstance(value, int) and 0 <= value:
-            self.maximum = value
+                print('\r│' + ' ' * self.width + '│ ', end="")

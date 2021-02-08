@@ -1,0 +1,35 @@
+{% macro chapter_to_string(chapter_parent, order="") %}
+    {%- for chapter in chapter_parent.children %}
+    {%- if order %}
+        {%- set current_order = order + "." + (loop.index|string) %}
+    {%- else %}
+        {%- set current_order = loop.index|string %}
+    {%- endif %}
+    <navPoint id="chapter_{{ current_order }}" playOrder="{{ current_order }}">
+        <navLabel>
+            <text>{{ chapter.title }}</text>
+        </navLabel>
+        <content src="{% if wrap_pages %}pages/{{ chapter.start.id }}.xhtml{% else %}images/{{ chapter.start.filename }}{% endif %}"/>
+        {{- chapter_to_string(chapter, current_order)|indent }}
+    </navPoint>
+    {%- endfor %}
+{%- endmacro -%}
+
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE ncx PUBLIC "-//NISO//DTD ncx 2005-1//EN" "http://www.daisy.org/z3986/2005/ncx-2005-1.dtd">
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+    <head>
+        <meta name="dtb:uid" content="{{ uuid }}"/>
+        <meta name="dtb:depth" content="{{ chapter_tree.depth }}"/>
+        <meta name="dtb:totalPageCount" content="0"/>
+        <meta name="dtb:maxPageNumber" content="0"/>
+    </head>
+
+<docTitle>
+    <text>{{ name }}</text>
+</docTitle>
+
+<navMap>
+    {{- chapter_to_string(chapter_tree) }}
+</navMap>
+</ncx>

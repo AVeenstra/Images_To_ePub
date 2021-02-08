@@ -1,0 +1,23 @@
+@charset "utf-8";
+
+a {
+    text-decoration: none;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+#toc img {
+    max-width: 25vw;
+}
+
+#toc ol {
+    list-style-type: none;
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    text-align: center;
+}

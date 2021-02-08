@@ -1,0 +1,36 @@
+{% macro chapter_to_string(chapter_parent, order="") %}
+    {%- if chapter_parent.children %}
+    <ol>
+        {%- for chapter in chapter_parent.children %}
+        {%- if order %}
+            {%- set current_order = order + "." + (loop.index|string) %}
+        {%- else %}
+            {%- set current_order = loop.index|string %}
+        {%- endif %}
+        <li class="chapter" id="toc-{{ current_order }}">
+            <a href="{% if wrap_pages %}pages/{{ chapter.start.id }}.xhtml{% else %}images/{{ chapter.start.filename }}{% endif %}">
+                {{ current_order }} {{ chapter.title }}<br/>
+                <img src="images/{{ chapter.start.filename }}"  alt="Images not supported"/>
+            </a>
+            {{- chapter_to_string(chapter, current_order)|indent }}
+        </li>
+        {%- endfor %}
+    </ol>
+    {%- endif %}
+{%- endmacro -%}
+
+<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head>
+    <title>{{ name }}</title>
+    <link href="stylesheet.css" rel="stylesheet" type="text/css"/>
+</head>
+<body epub:type="frontmatter">
+<header>
+    <h1>Table of Contents</h1>
+</header>
+<nav epub:type="toc" id="toc">
+    {{- chapter_to_string(chapter_tree) }}
+</nav>
+</body>
+</html>

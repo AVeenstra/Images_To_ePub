@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" xml:lang="en" prefix="rendition: http://www.idpf.org/vocab/rendition/#" unique-identifier="BookID">
+    <metadata xmlns:opf="http://www.idpf.org/2007/opf" xmlns:dc="http://purl.org/dc/elements/1.1/">
+        <dc:title>{{ name }}</dc:title>
+        <dc:language>en-US</dc:language>
+        <dc:rights>Public Domain</dc:rights>
+        <dc:creator>ePub Creator</dc:creator>
+        <dc:publisher>ePub Creator</dc:publisher>
+        <dc:identifier id="BookID" opf:scheme="UUID">{{ uuid }}</dc:identifier>
+        <meta property="dcterms:modified">2012-12-12T12:12:12Z</meta>
+        <meta property="rendition:layout">pre-paginated</meta>
+        <meta property="rendition:orientation">portrait</meta>
+        <meta property="rendition:spread">landscape</meta>
+        {%- if cover %}
+        <meta name="cover" content="{{ cover.id }}" />
+        {%- endif %}
+    </metadata>
+    <manifest>
+        <item id="style" href="stylesheet.css" media-type="text/css" />
+        {%- for image in images %}
+        <item id="{{ image.id }}" {% if image.is_cover %}properties="cover-image" {% endif %}href="images/{{ image.filename }}" media-type="{{ image.type }}"/>
+        {%- if wrap_pages %}
+        <item id="{{ image.id }}_wrapper" href="pages/{{ image.id }}.xhtml" media-type="application/xhtml+xml"/>
+        {% endif %}
+        {%- endfor %}
+        <item id="toc" properties="nav" href="toc.xhtml" media-type="application/xhtml+xml"/>
+        <item id="ncxtoc" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+    </manifest>
+    <spine toc="ncxtoc">
+        {%- for image in images %}
+        <itemref idref="{{- image.id -}} {%- if wrap_pages -%} _wrapper {%- endif -%}" />
+        {%- endfor %}
+    </spine>
+</package>
