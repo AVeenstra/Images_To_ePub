@@ -39,9 +39,9 @@ def validate(condition, entry, result):
 
 
 class MainFrame(tk.Frame):
-    def __init__(self, _master, input_dir=None, file=None, name="", grayscale=False, max_width=None, max_height=None,
-                 wrap_pages=True):
-        tk.Frame.__init__(self, master=_master, width=525, height=200)
+    def __init__(self, _master, input_dir=None, file=None, name="", author=None, publisher=None, language="en-US", grayscale=False, rotate_double_pages=True, max_width=None, max_height=None,
+                 wrap_pages=True, manga_mode=False):
+        tk.Frame.__init__(self, master=_master, width=525, height=215)
         self.master.protocol("WM_DELETE_WINDOW", self.close)
         self.generic_queue = Queue()
         self.progress_queue = Queue()
@@ -52,6 +52,7 @@ class MainFrame(tk.Frame):
         else:
             self.input_dir = None
             self.input_dir_var = tk.StringVar(value="No directory given")
+            
         self.file = file
         self.working = False
         self.thread: Optional[EPubMaker] = None
@@ -62,71 +63,85 @@ class MainFrame(tk.Frame):
         panel = tk.Frame()
         panel.place(in_=self, anchor="c", relx=.5, rely=.5)
 
-        # directory
-
-        self.input_dir_entry = tk.Entry(panel, state='readonly', textvariable=self.input_dir_var)
+        # Directory
+        self.input_dir_entry = tk.Entry(panel, state='readonly', textvariable=self.input_dir_var, width=50)
         self.input_dir_entry.grid(row=0, column=0, padx=5)
-        self.input_dir_entry.config(width=50)
 
-        self.button_dir = tk.Button(panel, text="Change directory", command=self.get_dir)
-        self.button_dir.config(width=15)
+        self.button_dir = tk.Button(panel, text="Change directory", command=self.get_dir, width=15)
         self.button_dir.grid(row=0, column=1, padx=5, pady=3)
 
-        # file
+        # File
         self.file_var = tk.StringVar(value=self.file)
-        self.file_entry = tk.Entry(panel, state='readonly', textvariable=self.file_var)
+        self.file_entry = tk.Entry(panel, state='readonly', textvariable=self.file_var, width=50)
         self.file_entry.grid(row=1, column=0, padx=5)
-        self.file_entry.config(width=50)
 
-        self.button_file = tk.Button(panel, text="Change file", command=self.save_as)
-        self.button_file.config(width=15)
+        self.button_file = tk.Button(panel, text="Change file", command=self.save_as, width=15)
         self.button_file.grid(row=1, column=1, padx=5, pady=3)
 
-        # name
+        # Name
         name_frame = tk.Frame(panel)
         name_frame.grid(row=2, column=0, columnspan=2, pady=3)
         tk.Label(name_frame, text="Name:").grid(row=0, column=0)
         self.name = tk.StringVar(value=name)
-        self.name_entry = tk.Entry(name_frame, textvariable=self.name, validate="key")
-        self.name_entry.config(width=40)
+        self.name_entry = tk.Entry(name_frame, textvariable=self.name, validate="key", width=60)
         self.name_entry.grid(row=0, column=1, padx=5)
 
-        # image size
+        # Metadata
+        metadata_frame = tk.Frame(panel)
+        metadata_frame.grid(row=3, column=0, columnspan=2, pady=3)
+        tk.Label(metadata_frame, text="Author:").grid(row=0, column=0)
+        self.author = tk.StringVar(value=author)
+        self.author_entry = tk.Entry(metadata_frame, textvariable=self.author, validate="key", width=15)
+        self.author_entry.grid(row=0, column=1, padx=5)
+        tk.Label(metadata_frame, text="Publisher:").grid(row=0, column=2)
+        self.publisher = tk.StringVar(value=publisher)
+        self.publisher_entry = tk.Entry(metadata_frame, textvariable=self.publisher, validate="key", width=15)
+        self.publisher_entry.grid(row=0, column=3, padx=5)
+        tk.Label(metadata_frame, text="Language:").grid(row=0, column=4)
+        self.language = tk.StringVar(value=language)
+        languages_list = ["en-US", "pt-BR", "ja-JP"]
+        self.language_entry = tk.OptionMenu(metadata_frame, self.language, *languages_list)
+        self.language_entry.grid(row=0, column=5, padx=5)
+
+        # Image size
         size_frame = tk.Frame(panel)
-        size_frame.grid(row=3, column=0, columnspan=2, pady=3)
+        size_frame.grid(row=4, column=0, columnspan=2, pady=3)
         tk.Label(size_frame, text="Maximum width: ").grid(row=0, column=0)
         self.max_width = tk.StringVar(value=max_width)
-        self.max_width_entry = tk.Entry(size_frame, textvariable=self.max_width)
-        self.max_width_entry.config(width=15)
+        self.max_width_entry = tk.Entry(size_frame, textvariable=self.max_width, width=15)
         self.max_width_entry.grid(row=0, column=1, padx=5)
         tk.Label(size_frame, text="Maximum height: ").grid(row=0, column=2)
         self.max_height = tk.StringVar(value=max_height)
-        self.max_height_entry = tk.Entry(size_frame, textvariable=self.max_height)
-        self.max_height_entry.config(width=15)
+        self.max_height_entry = tk.Entry(size_frame, textvariable=self.max_height, width=15)
         self.max_height_entry.grid(row=0, column=3, padx=5)
 
-        # options
+        # Options
         options_frame = tk.Frame(panel)
-        options_frame.grid(row=4, column=0, columnspan=2, pady=3)
+        options_frame.grid(row=5, column=0, columnspan=2, pady=3)
         self.grayscale = tk.BooleanVar(value=grayscale)
         self.grayscale_entry = tk.Checkbutton(options_frame, text="Grayscale", variable=self.grayscale)
         self.grayscale_entry.grid(row=0, column=0, padx=5)
+        self.rotate_double_pages = tk.BooleanVar(value=rotate_double_pages)
+        self.rotate_double_pages_entry = tk.Checkbutton(options_frame, text="Rotate double pages", variable=self.rotate_double_pages)
+        self.rotate_double_pages_entry.grid(row=0, column=1, padx=5)
         self.wrap_pages = tk.BooleanVar(value=wrap_pages)
         self.wrap_pages_entry = tk.Checkbutton(options_frame, text="Wrap pages", variable=self.wrap_pages)
-        self.wrap_pages_entry.grid(row=0, column=1, padx=5)
+        self.wrap_pages_entry.grid(row=0, column=2, padx=5)
+        self.manga_mode = tk.BooleanVar(value=manga_mode)
+        self.manga_mode_entry = tk.Checkbutton(options_frame, text="Manga mode", variable=self.manga_mode)
+        self.manga_mode_entry.grid(row=0, column=3, padx=5)
+    
 
-        # progress
+        # Progress
         progress = tk.Frame(panel)
-        progress.grid(row=5, column=0, columnspan=2, pady=3)
-        self.button_start = tk.Button(progress, text="Start", command=self.start)
-        self.button_start.config(width=10)
+        progress.grid(row=6, column=0, columnspan=2, pady=3)
+        self.button_start = tk.Button(progress, text="Start", command=self.start, width=10)
         self.button_start.grid(row=0, column=0, padx=5, pady=3)
 
         self.progress = ttk.Progressbar(progress, length=200, mode='determinate', name='progress of making the ePub')
         self.progress.grid(row=0, column=1, padx=5, pady=3)
 
-        self.button_stop = tk.Button(progress, text="Stop", command=self.stop)
-        self.button_stop.config(width=10)
+        self.button_stop = tk.Button(progress, text="Stop", command=self.stop, width=10)
         self.button_stop.grid(row=0, column=2, padx=5, pady=3)
 
         self.set_state()
@@ -148,13 +163,19 @@ class MainFrame(tk.Frame):
     def get_invalid(self):
         max_width = self.max_width.get()
         max_height = self.max_height.get()
+        author = self.author.get()
+        publisher = self.publisher.get()
         result = [
             validate(self.input_dir and os.path.isdir(self.input_dir), self.input_dir_entry, "input directory"),
             validate(self.file, self.file_entry, "ouput file"),
             validate(self.name.get(), self.name_entry, "name"),
+            validate(not author or author, self.author_entry, "author"),
+            validate(not publisher or publisher, self.publisher_entry, "publisher"),
+            validate(self.language.get(), self.language_entry, "language"),
             validate(not max_width or max_width.isnumeric(), self.max_width_entry, "maximum width"),
             validate(not max_height or max_height.isnumeric(), self.max_height_entry, "maximum height"),
         ]
+        
         return list(filter(None, result))
 
     def set_state(self):
@@ -163,9 +184,11 @@ class MainFrame(tk.Frame):
         self.button_file.config(state=state)
         self.name_entry.config(state=state)
         self.grayscale_entry.config(state=state)
+        self.rotate_double_pages_entry.config(state=state)
         self.wrap_pages_entry.config(state=state)
         self.max_width_entry.config(state=state)
         self.max_height_entry.config(state=state)
+        self.manga_mode_entry.config(state=state)
         self.button_stop.config(state=tk.NORMAL if self.working else tk.DISABLED)
         self.button_start.config(state=tk.NORMAL if not self.working else tk.DISABLED)
         return True
@@ -176,9 +199,9 @@ class MainFrame(tk.Frame):
             self.working = True
             max_width, max_height = self.max_width.get(), self.max_height.get()
             self.thread = EPubMaker(
-                master=self, input_dir=self.input_dir, file=self.file, name=self.name.get(),
-                wrap_pages=self.wrap_pages.get(), max_width=int(max_width) if max_width else None,
-                max_height=int(max_height) if max_height else None, grayscale=self.grayscale.get(),
+                master=self, input_dir=self.input_dir, file=self.file, name=self.name.get(), author=self.author.get(), publisher=self.publisher.get(), language=self.language.get(),
+                wrap_pages=self.wrap_pages.get(), rotate_double_pages=self.rotate_double_pages.get(), max_width=int(max_width) if max_width else None,
+                max_height=int(max_height) if max_height else None, grayscale=self.grayscale.get(), manga_mode=self.manga_mode.get(),
             )
             self.thread.start()
         else:
@@ -230,11 +253,11 @@ class MainFrame(tk.Frame):
         self.after(UPDATE_TIME, self.process_queue)
 
 
-def start_gui(input_dir=None, file=None, name="", grayscale=False, max_width=None, max_height=None, wrap_pages=True):
+def start_gui(input_dir=None, file=None, name="", author=None, publisher=None, language="en-US", grayscale=False, rotate_double_pages=True, max_width=None, max_height=None, wrap_pages=True, manga_mode=False):
     root = tk.Tk()
     MainFrame(
-        root, input_dir=input_dir, file=file, name=name, grayscale=grayscale, max_width=max_width,
-        max_height=max_height, wrap_pages=wrap_pages
+        root, input_dir=input_dir, file=file, name=name, author=author, publisher=publisher, language=language, grayscale=grayscale, rotate_double_pages=rotate_double_pages, max_width=max_width,
+        max_height=max_height, wrap_pages=wrap_pages, manga_mode=manga_mode
     ).mainloop()
 
 

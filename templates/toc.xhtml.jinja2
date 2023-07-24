@@ -9,7 +9,7 @@
         {%- endif %}
         <li class="chapter" id="toc-{{ current_order }}">
             <a href="{% if wrap_pages %}pages/{{ chapter.start.id }}.xhtml{% else %}images/{{ chapter.start.filename }}{% endif %}">
-                {{ current_order }} {{ chapter.title }}<br/>
+                {{ chapter.title }}<br/>
                 <img src="images/{{ chapter.start.filename }}"  alt="Images not supported"/>
             </a>
             {{- chapter_to_string(chapter, current_order)|indent }}

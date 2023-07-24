@@ -76,7 +76,7 @@ class Chapter:
 
 
 class EPubMaker(threading.Thread):
-    def __init__(self, master, input_dir, file, name, wrap_pages, grayscale, max_width, max_height, progress=None):
+    def __init__(self, master, input_dir, file, name, author=None, publisher=None, language="en-US", grayscale=False, rotate_double_pages=True, max_width=None, max_height=None, wrap_pages=True, manga_mode=False, progress=None):
         threading.Thread.__init__(self)
         self.master = master
         self.progress = None
@@ -97,10 +97,15 @@ class EPubMaker(threading.Thread):
         self.chapter_tree: Optional[Chapter] = None
         self.images = []
         self.uuid = 'urn:uuid:' + str(uuid.uuid1())
+        self.author = author
+        self.publisher = publisher
+        self.language = language
         self.grayscale = grayscale
+        self.rotate_double_pages = rotate_double_pages
         self.max_width = max_width
         self.max_height = max_height
         self.wrap_pages = wrap_pages
+        self.manga_mode = manga_mode
 
     def run(self):
         try:
@@ -199,13 +204,16 @@ class EPubMaker(threading.Thread):
             image_data: PIL.Image.Image = PIL.Image.open(image["source"])
             image["width"], image["height"] = image_data.size
             image["type"] = image_data.get_format_mimetype()
-            should_resize = (self.max_width and self.max_width < image["width"]) or (
-                        self.max_height and self.max_height < image["height"])
+            should_rotate = self.rotate_double_pages and (image["width"] > image["height"]) 
+            should_resize = (self.max_width and self.max_width < image["width"]) or (self.max_height and self.max_height < image["height"])
             should_grayscale = self.grayscale and image_data.mode != "L"
-            if not should_grayscale and not should_resize:
+            if should_rotate==should_resize==should_grayscale==False:
                 self.zip.write(image["source"], output)
             else:
                 image_format = image_data.format
+                if should_rotate:
+                    image_data = image_data.rotate(90, expand=1)
+                    image["width"], image["height"] = image_data.size
                 if should_resize:
                     width_scale = image["width"] / self.max_width if self.max_width else 1.0
                     height_scale = image["height"] / self.max_height if self.max_height else 1.0
@@ -217,20 +225,21 @@ class EPubMaker(threading.Thread):
                 with self.zip.open(output, "w") as image_file:
                     image_data.save(image_file, format=image_format)
 
-            if self.wrap_pages:
+            if self.wrap_pages and not image["is_cover"]:
                 self.zip.writestr(os.path.join("pages", image["id"] + ".xhtml"), template.render(image))
 
             if self.progress:
                 self.progress.progress_set_value(progress)
             self.check_is_stopped()
+      
         if self.progress:
             self.progress.progress_set_value(len(self.images))
 
     def write_template(self, name, *, out=None, data=None):
         out = out or name
         data = data or {
-            "name": self.name, "uuid": self.uuid, "cover": self.cover, "chapter_tree": self.chapter_tree,
-            "images": self.images, "wrap_pages": self.wrap_pages,
+            "name": self.name, "author": self.author, "publisher": self.publisher, "language": self.language, "uuid": self.uuid, "cover": self.cover, "chapter_tree": self.chapter_tree,
+            "images": self.images, "wrap_pages": self.wrap_pages, "manga_mode": self.manga_mode,
         }
         self.zip.writestr(out, self.template_env.get_template(name + '.jinja2').render(data))
 
