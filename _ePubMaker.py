@@ -217,7 +217,7 @@ class EPubMaker(threading.Thread):
                 with self.zip.open(output, "w") as image_file:
                     image_data.save(image_file, format=image_format)
 
-            if self.wrap_pages:
+            if self.wrap_pages and not image["is_cover"]:
                 self.zip.writestr(os.path.join("pages", image["id"] + ".xhtml"), template.render(image))
 
             if self.progress:

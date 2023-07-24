@@ -19,7 +19,7 @@
         <item id="style" href="stylesheet.css" media-type="text/css" />
         {%- for image in images %}
         <item id="{{ image.id }}" {% if image.is_cover %}properties="cover-image" {% endif %}href="images/{{ image.filename }}" media-type="{{ image.type }}"/>
-        {%- if wrap_pages %}
+        {%- if wrap_pages and not image.is_cover%}
         <item id="{{ image.id }}_wrapper" href="pages/{{ image.id }}.xhtml" media-type="application/xhtml+xml"/>
         {% endif %}
         {%- endfor %}
@@ -28,7 +28,9 @@
     </manifest>
     <spine toc="ncxtoc">
         {%- for image in images %}
+        {%- if not image.is_cover %}
         <itemref idref="{{- image.id -}} {%- if wrap_pages -%} _wrapper {%- endif -%}" />
+        {% endif %}
         {%- endfor %}
     </spine>
 </package>
