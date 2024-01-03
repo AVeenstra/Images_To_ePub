@@ -1,5 +1,5 @@
 # coding=utf-8
-""" Convert a folder with images to an ePub file. Great for comics and manga!
+""" Convert a folder with images to an ePub file. Great for Comics and Manga!
     Copyright (C) 2021  Antoine Veenstra
 
     This program is free software: you can redistribute it and/or modify
@@ -26,47 +26,25 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List
 from zipfile import ZipFile, ZIP_STORED, ZIP_DEFLATED
+from ebooklib import epub
 
 import PIL.Image
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
+import mimetypes
 
-MEDIA_TYPES = {'.png': 'image/png', '.jpg': 'image/jpeg', '.gif': 'image/gif'}
 TEMPLATE_DIR = Path(__file__).parent.joinpath("templates")
 
 
 def natural_keys(text):
-    """
-    http://nedbatchelder.com/blog/200712/human_sorting.html
-    """
+   
     return [(int(c) if c.isdigit() else c) for c in re.split(r'(\d+)', text)]
 
-
-def filter_images(files):
-    files.sort(key=natural_keys)
-    for x in files:
-        _, extension = os.path.splitext(x)
-        file_type = MEDIA_TYPES.get(extension)
-        if file_type:
-            yield x, file_type, extension
-
-
 class Chapter:
-    def __init__(self, dir_path, title, start: str = None):
+    def __init__(self, dir_path, files=[]):
         self.dir_path = dir_path
-        self.title = title
+        self.title = dir_path.name
+        self.files=files
         self.children: List[Chapter] = []
-        self._start = start
-
-    @property
-    def start(self) -> Optional[str]:
-        if self._start:
-            return self._start
-        if self.children:
-            return self.children[0].start
-
-    @start.setter
-    def start(self, value):
-        self._start = value
 
     @property
     def depth(self) -> int:
@@ -74,9 +52,8 @@ class Chapter:
             return 1 + max(child.depth for child in self.children)
         return 1
 
-
 class EPubMaker(threading.Thread):
-    def __init__(self, master, input_dir, file, name, wrap_pages, grayscale, max_width, max_height, progress=None):
+    def __init__(self, master, input_dir, file:str, name, author=None, publisher=None, language="pt-BR", reversed_mode=False, progress=None):
         threading.Thread.__init__(self)
         self.master = master
         self.progress = None
@@ -85,32 +62,30 @@ class EPubMaker(threading.Thread):
         elif progress:
             self.progress = progress
         self.dir = input_dir
-        self.file = file
+        self.file = Path(file).with_suffix('.epub').as_posix()
         self.name = name
         self.picture_at = 1
         self.stop_event = False
 
         self.template_env = Environment(loader=FileSystemLoader(TEMPLATE_DIR), undefined=StrictUndefined)
 
-        self.zip: Optional[ZipFile] = None
-        self.cover = None
         self.chapter_tree: Optional[Chapter] = None
-        self.images = []
+        self.chapter_shortcuts = {}
         self.uuid = 'urn:uuid:' + str(uuid.uuid1())
-        self.grayscale = grayscale
-        self.max_width = max_width
-        self.max_height = max_height
-        self.wrap_pages = wrap_pages
+        self.author = author
+        self.publisher = publisher
+        self.language = language
+        self.reversed_mode = "rtl" if reversed_mode else "ltr"
+        self.image_mode = False
 
     def run(self):
         try:
             assert os.path.isdir(self.dir), "The given directory does not exist!"
             assert self.name, "No name given!"
 
-            self.make_epub()
+            self.create_epub()
 
             if self.master is None:
-                print()
                 print("ePub created")
             else:
                 self.master.generic_queue.put(lambda: self.master.stop(1))
@@ -120,8 +95,7 @@ class EPubMaker(threading.Thread):
                 if self.master is not None:
                     self.master.generic_queue.put(lambda: self.master.showerror(
                         "Error encountered",
-                        "The following error was thrown:\n{}".format(e)
-                    ))
+                        "The following error was thrown:\n{}".format(str(e))))
                 else:
                     print("Error encountered:", file=sys.stderr)
                     traceback.print_exc()
@@ -131,108 +105,165 @@ class EPubMaker(threading.Thread):
             except IOError:
                 pass
 
-    def make_epub(self):
-        with ZipFile(self.file, mode='w', compression=ZIP_DEFLATED) as self.zip:
-            self.zip.writestr('mimetype', 'application/epub+zip', compress_type=ZIP_STORED)
-            self.add_file('META-INF', "container.xml")
-            self.add_file('stylesheet.css')
-            self.make_tree()
-            self.assign_image_ids()
-            self.write_images()
-            self.write_template('package.opf')
-            self.write_template('toc.xhtml')
-            self.write_template('toc.ncx')
+    def create_epub(self):
+        
+        book = epub.EpubBook()
+        book.set_identifier(self.uuid)
+        book.set_title(self.name)
+        book.set_language(self.language)
+        book.add_author(self.author)
+        book.add_metadata('DC', 'publisher', self.publisher)
+        book.set_direction(self.reversed_mode)
+        self.make_tree()
 
-    def add_file(self, *path: str):
-        self.zip.write(TEMPLATE_DIR.joinpath(*path), os.path.join(*path))
+
+        allcaps=[]
+        chapters_infos={}
+        list_chapters=list(self.chapter_shortcuts.values())
+
+        if self.progress:
+            self.progress.progress_set_maximum(len(list_chapters))
+            self.progress.progress_set_value(0)
+
+        for progress, obj in enumerate(list_chapters):
+
+            caps=[]
+
+            if obj.dir_path!=Path(self.dir).parent:
+
+                pos=list_chapters.index(obj)
+                verif_obj=obj
+                
+                while (len(verif_obj.files)==0 or all(Path(file).suffix.lower()=='.epub' for file in verif_obj.files)) and pos<len(list_chapters):
+                    pos+=1
+                    verif_obj=list_chapters[pos]
+
+                if obj.files:
+
+                    if self.image_mode:
+
+
+                            nome=os.path.splitext(obj.dir_path.name)[0]
+                            cap = epub.EpubHtml(title=nome, file_name=obj.dir_path.with_suffix('.xhtml').name)
+                            cap.content=''
+                            for file in sorted(obj.files, key=natural_keys):   
+
+                                file=Path(file)
+                                file_name=os.path.join(nome, file.name)
+                                ext=os.path.splitext(file_name)[-1]
+                                if os.path.splitext(file.name)[0]=='cover':
+                                    
+                                    book.set_cover(nome, open(file, 'rb').read())
+
+                                elif ext in ['.png', '.jpg']:
+
+                                    image = epub.EpubImage(file_name=file_name, content=open(file, "rb").read())
+                                    book.add_item(image)
+                                    cap.content+='<img src="{}"/>'.format(file_name) 
+
+                            if len(cap.content):
+                                book.add_item(cap)
+                                caps.append(cap)
+
+                    else:
+                        for file in sorted(obj.files, key=natural_keys):
+
+                            file=Path(file)
+                            file_name=file.with_suffix('.xhtml').name
+                            nome=os.path.splitext(file.name)[0]
+                            ext=os.path.splitext(file.name)[-1]
+
+                            if nome=='cover':
+
+                                book.set_cover(nome, open(file, 'rb').read())
+
+                            elif ext in ['.html', '.png', '.jpg']:
+
+                                cap = epub.EpubHtml(title=nome, file_name=file_name)
+
+                                if ext=='.html':   
+
+                                    cap.content = open(file, 'r', encoding='utf-8').read()
+
+                                else:  
+
+                                    image = epub.EpubImage(file_name=file.name, content=open(file, "rb").read())
+                                    book.add_item(image)
+                                    cap.content ='<img src="{}"/>'.format(file.name) 
+
+                                book.add_item(cap)
+                                caps.append(cap)
+
+                if self.image_mode:
+                    if len(caps):
+                        section=caps
+                    else:
+                        section=[epub.Section(obj.title, Path(verif_obj.title).with_suffix('.xhtml').name), caps]
+                else:
+                    section=[epub.Section(obj.title, Path(sorted(verif_obj.files, key=natural_keys)[0]).with_suffix('.xhtml').name), caps]
+                allcaps.extend(caps)
+                chapters_infos.update({obj.dir_path: section})
+                
+            if self.progress:
+                self.progress.progress_set_value(progress)
+            self.check_is_stopped()
+      
+        if self.progress:
+            self.progress.progress_set_value(len(list_chapters))
+
+        infos_copy=chapters_infos.copy()
+        for dir_path, section in reversed(chapters_infos.items()):
+            if dir_path!=Path(self.dir):
+                add=infos_copy.pop(dir_path)
+                qnt=len(add)
+                if self.image_mode:
+                    index=0
+                    if qnt==1:
+                        add=add[0]
+                else:  
+                    index=qnt
+                infos_copy[dir_path.parent][-1].insert(index, add)
+            
+        book.toc=list(infos_copy.values())
+        book.add_item(epub.EpubNcx())
+        book.add_item(epub.EpubNav())
+        
+        # define CSS style
+        nav_css = epub.EpubItem(
+            uid="style_nav",
+            file_name="style/nav.css",
+            media_type="text/css",
+            content="BODY {color: white;}",
+                                )
+        
+        book.add_item(nav_css)
+        
+        book.spine = ["nav"]+allcaps
+        
+        epub.write_epub(self.file, book, {})
+
 
     def make_tree(self):
+
         root = Path(self.dir)
-        self.chapter_tree = Chapter(root.parent, None)
-        chapter_shortcuts = {root.parent: self.chapter_tree}
+        self.chapter_tree = Chapter(root.parent)
+        self.chapter_shortcuts = {root.parent: self.chapter_tree}
+        allfiles=[]
 
         for dir_path, dir_names, filenames in os.walk(self.dir):
+            allfiles.extend(filenames)
             dir_names.sort(key=natural_keys)
-            images = self.get_images(filenames, dir_path)
+            filesdir = [os.path.join(dir_path, file) for file in filenames]
             dir_path = Path(dir_path)
-            chapter = Chapter(dir_path, dir_path.name, images[0] if images else None)
-            chapter_shortcuts[dir_path.parent].children.append(chapter)
-            chapter_shortcuts[dir_path] = chapter
+            chapter = Chapter(dir_path, filesdir)
+            self.chapter_shortcuts[dir_path.parent].children.append(chapter)
+            self.chapter_shortcuts[dir_path] = chapter
 
         while len(self.chapter_tree.children) == 1:
             self.chapter_tree = self.chapter_tree.children[0]
 
-    def get_images(self, files, root):
-        result = []
-        for x, file_type, extension in filter_images(files):
-            data = self.add_image(os.path.join(root, x), file_type, extension)
-            result.append(data)
-            if not self.cover and 'cover' in x.lower():
-                self.cover = data
-                data["is_cover"] = True
-        return result
-
-    def add_image(self, source, file_type, extension):
-        data = {"extension": extension, "type": file_type, "source": source, "is_cover": False}
-        self.images.append(data)
-        return data
-
-    def assign_image_ids(self):
-        if not self.cover and self.images:
-            cover = self.images[0]
-            cover["is_cover"] = True
-            self.cover = cover
-        padding_width = len(str(len(self.images)))
-        for count, image in enumerate(self.images):
-            image["id"] = f"image_{count:0{padding_width}}"
-            image["filename"] = image["id"] + image["extension"]
-
-    def write_images(self):
-        if self.progress:
-            self.progress.progress_set_maximum(len(self.images))
-            self.progress.progress_set_value(0)
-
-        template = self.template_env.get_template("page.xhtml.jinja2")
-
-        for progress, image in enumerate(self.images):
-            output = os.path.join('images', image["filename"])
-            image_data: PIL.Image.Image = PIL.Image.open(image["source"])
-            image["width"], image["height"] = image_data.size
-            image["type"] = image_data.get_format_mimetype()
-            should_resize = (self.max_width and self.max_width < image["width"]) or (
-                        self.max_height and self.max_height < image["height"])
-            should_grayscale = self.grayscale and image_data.mode != "L"
-            if not should_grayscale and not should_resize:
-                self.zip.write(image["source"], output)
-            else:
-                image_format = image_data.format
-                if should_resize:
-                    width_scale = image["width"] / self.max_width if self.max_width else 1.0
-                    height_scale = image["height"] / self.max_height if self.max_height else 1.0
-                    scale = max(width_scale, height_scale)
-                    image_data = image_data.resize((int(image["width"] / scale), int(image["height"] / scale)))
-                    image["width"], image["height"] = image_data.size
-                if should_grayscale:
-                    image_data = image_data.convert("L")
-                with self.zip.open(output, "w") as image_file:
-                    image_data.save(image_file, format=image_format)
-
-            if self.wrap_pages:
-                self.zip.writestr(os.path.join("pages", image["id"] + ".xhtml"), template.render(image))
-
-            if self.progress:
-                self.progress.progress_set_value(progress)
-            self.check_is_stopped()
-        if self.progress:
-            self.progress.progress_set_value(len(self.images))
-
-    def write_template(self, name, *, out=None, data=None):
-        out = out or name
-        data = data or {
-            "name": self.name, "uuid": self.uuid, "cover": self.cover, "chapter_tree": self.chapter_tree,
-            "images": self.images, "wrap_pages": self.wrap_pages,
-        }
-        self.zip.writestr(out, self.template_env.get_template(name + '.jinja2').render(data))
+        if all('image' in mimetypes.guess_type(file)[0] for file in allfiles if Path(file).suffix.lower()!='.epub'):
+            self.image_mode=True
 
     def stop(self):
         self.stop_event = True
